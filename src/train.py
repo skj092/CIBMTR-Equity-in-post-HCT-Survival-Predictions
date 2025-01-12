@@ -2,7 +2,6 @@ from lifelines.utils import concordance_index
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-import code
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -10,7 +9,13 @@ from pathlib import Path
 from lifelines import KaplanMeierFitter
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, train_test_split
+
+import optuna
+import lightgbm as lgb
+import xgboost as xgb
+import warnings
+warnings.filterwarnings(action='ignore')
 
 path = Path('data')
 df = pd.read_csv(path/'train.csv')
@@ -78,11 +83,47 @@ preprocessor = ColumnTransformer(
     ]
 )
 
+# ===========Find Optinal Hyperparamenters==============
+x_train, x_valid, y_train, y_valid = train_test_split(
+    X, y, test_size=0.2, random_state=42)
+
+
+def objective(trial):
+    params = {
+        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+        'learning_rate': trial.suggest_loguniform('learning_rate', 0.01, 0.3),
+        'max_depth': trial.suggest_int('max_depth', 5, 15),
+        'subsample': trial.suggest_uniform('subsample', 0.5, 1.0),
+        'random_state': 42,
+    }
+    # create model pipeline
+    model = Pipeline(steps=[
+                     ('preprocessor', preprocessor),
+                     ('classifier', GradientBoostingRegressor(**params))
+                     ])
+
+    model[1].eval_set = ([(x_valid, y_valid)])
+    model.fit(x_train, y_train)
+
+    y_pred = model.predict(x_valid)
+    mape = concordance_index(y_valid, y_pred)
+    return mape
+
+
+study = optuna.create_study(direction='maximize')
+study.optimize(objective, n_trials=1)
+print(f"best parameters: {study.best_params}")
+print(f"best c c_index: {study.best_value}")
+
+lgb_params = study.best_params
+# ========================================================
+
+
 # create model pipeline
 model = Pipeline(steps=[
-                 ('preprocessor', preprocessor),
-                 ('classifier', GradientBoostingRegressor(random_state=42))
-                 ])
+    ('preprocessor', preprocessor),
+    ('classifier', GradientBoostingRegressor(**lgb_params))
+])
 
 kf = KFold(n_splits=5, shuffle=True, random_state=42)
 c_indices = []
@@ -97,3 +138,11 @@ for train_index, val_index in kf.split(X):
     print(f"stratified C-Index : {c_index:.4f}")
 
 print(f"mean stratified C-Index : {np.mean(c_indices):.4f}")
+
+# ==========Inference===============
+test_df = pd.read_csv(path/'test.csv')
+prediction = model.predict(test_df.drop(
+    columns=['ID', 'rituximub'], errors='ignore'))
+test_df['prediction'] = prediction
+test_df[['ID', 'prediction']].to_csv('submission.csv', index=False)
+print("prediction save")
