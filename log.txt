@@ -1,0 +1,21 @@
+l_with_target()
+-> c_index = concordance_index(y_valid, val_preds)
+(Pdb) val_preds
+array([0.65550523, 0.62492521, 0.5425037 , ..., 0.53740139, 0.57368058,
+       0.63941035])
+(Pdb) y_valid
+3        0.456661
+6        0.458404
+17       0.757788
+29       0.547583
+30       0.463036
+           ...
+28765    0.896521
+28781    0.458851
+28782    0.977153
+28786    0.627323
+28788    0.460841
+Name: target_km, Length: 5760, dtype: float64
+(Pdb) concordance_index(y_valid, val_preds)
+0.6391822314044311
+
