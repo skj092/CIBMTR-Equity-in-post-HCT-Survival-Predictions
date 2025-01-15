@@ -11,15 +11,67 @@ from sklearn.model_selection import KFold
 import lightgbm as lgb
 from catboost import CatBoostRegressor
 import warnings
-warnings.filterwarnings(action='ignore')
 
-path = Path('data')
-df = pd.read_csv(path/'train.csv')
-df = df.drop('ID', axis=1)
+warnings.filterwarnings(action="ignore")
+
+path = Path("data")
+df = pd.read_csv(path / "train.csv")
+df = df.drop("ID", axis=1)
+
+
+def recalculate_hla_sums(df):
+    # Fill null values with 0 for all HLA columns
+    hla_columns = [col for col in df.columns if "hla_match_" in col]
+    df[hla_columns] = df[hla_columns].fillna(0)
+
+    # Calculate sums for different HLA groupings
+    df["hla_nmdp_6"] = (
+        df["hla_match_a_low"] + df["hla_match_b_low"] + df["hla_match_drb1_high"]
+    )
+
+    df["hla_low_res_6"] = (
+        df["hla_match_a_low"] + df["hla_match_b_low"] + df["hla_match_drb1_low"]
+    )
+
+    df["hla_high_res_6"] = (
+        df["hla_match_a_high"] + df["hla_match_b_high"] + df["hla_match_drb1_high"]
+    )
+
+    df["hla_low_res_8"] = (
+        df["hla_match_a_low"]
+        + df["hla_match_b_low"]
+        + df["hla_match_c_low"]
+        + df["hla_match_drb1_low"]
+    )
+
+    df["hla_high_res_8"] = (
+        df["hla_match_a_high"]
+        + df["hla_match_b_high"]
+        + df["hla_match_c_high"]
+        + df["hla_match_drb1_high"]
+    )
+
+    df["hla_low_res_10"] = (
+        df["hla_match_a_low"]
+        + df["hla_match_b_low"]
+        + df["hla_match_c_low"]
+        + df["hla_match_drb1_low"]
+        + df["hla_match_dqb1_low"]
+    )
+
+    df["hla_high_res_10"] = (
+        df["hla_match_a_high"]
+        + df["hla_match_b_high"]
+        + df["hla_match_c_high"]
+        + df["hla_match_drb1_high"]
+        + df["hla_match_dqb1_high"]
+    )
+
+    return df
 
 
 def create_multiple_targets(df: pd.DataFrame, time_col: str, event_col: str):
-    '''Create multiple target columns using different survival analysis methods'''
+    """Create multiple target columns using different survival analysis methods"""
     # 1. Kaplan-Meier target
     kmf = KaplanMeierFitter()
     kmf.fit(df[time_col], event_observed=df[event_col])
@@ -43,19 +95,21 @@ def create_multiple_targets(df: pd.DataFrame, time_col: str, event_col: str):
 df.drop_duplicates(inplace=True)
 
 # collect categorical and numerical column
-cat_cols = df.select_dtypes(include='object').columns.values
-num_cols = df.select_dtypes(include=np.number).drop(
-    columns=['efs', 'efs_time']).columns.values
+cat_cols = df.select_dtypes(include="object").columns.values
+num_cols = (
+    df.select_dtypes(include=np.number).drop(columns=["efs", "efs_time"]).columns.values
+)
 
 # handling missing values
-nan_mapping = {'n/a': None, 'na': None, 'nan': None, '-': None}
+nan_mapping = {"n/a": None, "na": None, "nan": None, "-": None}
 for col in cat_cols:
     df[col] = df[col].str.strip().str.lower().replace(nan_mapping)
 
 df[num_cols] = df[num_cols].fillna(df[num_cols].median())
-df[cat_cols] = df[cat_cols].apply(lambda col: col.fillna(
-    col.mode()[0] if not col.mode().empty else 'unknown'))
-df[num_cols] = df[num_cols].astype('float32')
+df[cat_cols] = df[cat_cols].apply(
+    lambda col: col.fillna(col.mode()[0] if not col.mode().empty else "unknown")
+)
+df[num_cols] = df[num_cols].astype("float32")
 
 # Factorize categorical vars
 for col in df[cat_cols]:
@@ -63,61 +117,81 @@ for col in df[cat_cols]:
 
 # ===============handle target column============
 km_target, cox_target, na_target = create_multiple_targets(
-    df, time_col='efs_time', event_col='efs')
-df['target_km'] = km_target
-df['target_cox'] = cox_target
-df['target_na'] = na_target
-df = df.drop(columns=['efs', 'efs_time'], errors='ignore')
+    df, time_col="efs_time", event_col="efs"
+)
+df["target_km"] = km_target
+df["target_cox"] = cox_target
+df["target_na"] = na_target
+df = df.drop(columns=["efs", "efs_time"], errors="ignore")
 
 # ================Modeling===================
 # load training datga
-train_df = pd.read_csv(path/'train.csv')
+train_df = pd.read_csv(path / "train.csv")
 
 # handle missing values and categorical columns
 train_df[num_cols] = train_df[num_cols].fillna(train_df[num_cols].median())
-train_df[cat_cols] = train_df[cat_cols].apply(lambda col: col.fillna(
-    col.mode()[0] if not col.mode().empty else 'unknown'))
+train_df[cat_cols] = train_df[cat_cols].apply(
+    lambda col: col.fillna(col.mode()[0] if not col.mode().empty else "unknown")
+)
 
 for col in cat_cols:
-    train_df[col] = train_df[col].astype('category')
+    train_df[col] = train_df[col].astype("category")
 
-train_df['target_km'] = df['target_km']
-train_df['target_cox'] = df['target_cox']
-train_df['target_na'] = df['target_na']
+train_df["target_km"] = df["target_km"]
+train_df["target_cox"] = df["target_cox"]
+train_df["target_na"] = df["target_na"]
+
+# Feature Engineering
+train_df = recalculate_hla_sums(train_df)
 
 
-X = train_df.drop(columns=['efs', 'efs_time', 'ID', 'rituximub',
-                  'target_km', 'target_cox', 'target_na'], errors='ignore')
+X = train_df.drop(
+    columns=[
+        "efs",
+        "efs_time",
+        "ID",
+        "rituximub",
+        "target_km",
+        "target_cox",
+        "target_na",
+    ],
+    errors="ignore",
+)
 y_dict = {
-    'km': df['target_km'],
-    'cox': df['target_cox'],
-    'na': df['target_na'],
+    "km": df["target_km"],
+    "cox": df["target_cox"],
+    "na": df["target_na"],
 }
 
 
 # ===========Find Optinal Hyperparamenters==============
 # Define base parameters for both models
 lgb_params = {
-    'objective': 'regression',
-    'min_child_samples': 32,
-    'num_iterations': 6000,
-    'learning_rate': 0.03,
-    'num_leaves': 64,
-    'max_depth': 8,
-    'lambda_l1': 8.0,
-    'lambda_l2': 0.1,
-    'random_state': 42,
-    'verbose': -1
+    "objective": "regression",
+    "min_child_samples": 32,
+    "num_iterations": 6000,
+    "learning_rate": 0.03,
+    "extra_trees": True,
+    "reg_lambda": 8.0,
+    "reg_alpha": 0.1,
+    "num_leaves": 64,
+    "metric": "rmse",
+    "max_depth": 8,
+    "device": "cpu",
+    "max_bin": 128,
+    "verbose": -1,
+    "seed": 42,
 }
 
 ctb_params = {
-    'loss_function': 'RMSE',
-    'learning_rate': 0.03,
-    'random_state': 42,
-    'num_trees': 6000,
-    'subsample': 0.85,
-    'reg_lambda': 8.0,
-    'depth': 8
+    "loss_function": "RMSE",
+    "learning_rate": 0.03,
+    "random_state": 42,
+    "task_type": "CPU",
+    "num_trees": 6000,
+    "subsample": 0.85,
+    "reg_lambda": 8.0,
+    "depth": 8,
 }
 
 
@@ -132,24 +206,18 @@ def train_model_with_target(X, y, model_type, params, cat_cols, target_name):
         y_train, y_valid = y.iloc[train_idx], y.iloc[valid_idx]
 
         tik = time.time()
-        if model_type == 'lgb':
+        if model_type == "lgb":
             model = lgb.LGBMRegressor(**params)
             model.fit(
-                X_train, y_train,
+                X_train,
+                y_train,
                 eval_set=[(X_valid, y_valid)],
-                eval_metric='rmse',
-                callbacks=[lgb.early_stopping(
-                    300, verbose=0), lgb.log_evaluation(0)]
-
+                eval_metric="rmse",
+                callbacks=[lgb.early_stopping(300, verbose=0), lgb.log_evaluation(0)],
             )
         else:
-            model = CatBoostRegressor(
-                **params, cat_features=cat_cols, verbose=0)
-            model.fit(
-                X_train, y_train,
-                eval_set=[(X_valid, y_valid)],
-                verbose=False
-            )
+            model = CatBoostRegressor(**params, cat_features=cat_cols, verbose=0)
+            model.fit(X_train, y_train, eval_set=[(X_valid, y_valid)], verbose=False)
         tok = time.time()
         print(f"time taken to train {tok-tik:.2f}s")
         models.append(model)
@@ -159,7 +227,8 @@ def train_model_with_target(X, y, model_type, params, cat_cols, target_name):
         c_index = concordance_index(y_valid, val_preds)
         c_indices.append(c_index)
         print(
-            f"{model_type.upper()} - {target_name} - Fold {fold+1} C-Index {c_index:.4f}")
+            f"{model_type.upper()} - {target_name} - Fold {fold+1} C-Index {c_index:.4f}"
+        )
         break
 
     mean_c_index = np.mean(c_indices)
@@ -173,17 +242,17 @@ for target_name, y_target in y_dict.items():
 
     # Train LightGBM
     lgb_models, lgb_oof, lgb_score = train_model_with_target(
-        X, y_target, 'lgb', lgb_params, cat_cols, target_name
+        X, y_target, "lgb", lgb_params, cat_cols, target_name
     )
 
     # Traig CatBoost
-    print('trainig catboost')
-    ctb_models, ctb_oof, ctb_score = train_model_with_target(
-        X, y_target, 'ctb', ctb_params, cat_cols, target_name
-    )
+    # print('trainig catboost')
+    # ctb_models, ctb_oof, ctb_score = train_model_with_target(
+    #     X, y_target, 'ctb', ctb_params, cat_cols, target_name
+    # )
 
     results[target_name] = {
-        'lgb': {'models': lgb_models, 'oof': lgb_oof, 'score': lgb_score},
+        "lgb": {"models": lgb_models, "oof": lgb_oof, "score": lgb_score},
         # 'ctb': {'models': ctb_models, 'oof': ctb_oof, 'score': ctb_score}
     }
 
@@ -192,8 +261,9 @@ for target_name, y_target in y_dict.items():
 def make_prediction(test_data, results):
     all_predictions = []
     for target_name, models in results.items():
-        lgb_preds = np.mean([model.predict(test_data)
-                            for model in models['lgb']['models']], axis=0)
+        lgb_preds = np.mean(
+            [model.predict(test_data) for model in models["lgb"]["models"]], axis=0
+        )
         all_predictions.append(lgb_preds)
 
         # ctb_preds = np.mean([model.predict(test_data)
@@ -203,10 +273,10 @@ def make_prediction(test_data, results):
     return final_prediction
 
 
-test_df = pd.read_csv(path/'test.csv')
-X_test = test_df.drop(columns=['ID', 'rituximub'], errors='ignore')
+test_df = pd.read_csv(path / "test.csv")
+X_test = test_df.drop(columns=["ID", "rituximub"], errors="ignore")
 
 for col in cat_cols:
-    X_test[col] = X_test[col].astype('category')
+    X_test[col] = X_test[col].astype("category")
 
 prediction = make_prediction(X_test, results)
